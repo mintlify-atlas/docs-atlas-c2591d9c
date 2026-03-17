@@ -1,0 +1,53 @@
+---
+title: "Get channels"
+description: "Retrieve all channels the authenticated user is a member of."
+---
+
+Returns a list of all channels the currently authenticated user belongs to.
+
+```http
+GET /api/rpc/chat/channel
+```
+
+## Request
+
+No input parameters. Authentication is required via session cookie.
+
+## Response
+
+Returns an array of `Channel` objects.
+
+<ResponseField name="[]">Array of Channel objects</ResponseField>
+
+<ResponseField name="uuid" type="string">
+  Unique identifier (UUID) of the channel.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the channel.
+</ResponseField>
+
+<ResponseField name="ownerId" type="string">
+  User ID of the channel owner.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the channel was created.
+</ResponseField>
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useSuspenseQuery } from "@tanstack/react-query";
+
+const { data: channels } = useSuspenseQuery(
+  orpc.chat.channel.getChannels.queryOptions()
+);
+```

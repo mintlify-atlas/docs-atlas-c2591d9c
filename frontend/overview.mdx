@@ -1,0 +1,138 @@
+---
+title: "Frontend overview"
+description: "A guide to the React 19 frontend stack powering the Hono oRPC Chat web app."
+---
+
+The web application lives in `apps/web/` and is built with React 19. It uses TanStack Router for file-based routing, TanStack Query for server-state management, Tailwind CSS 4 for styling, shadcn/ui for accessible components, and Vite as the build tool.
+
+## Technology stack
+
+<CardGroup cols={2}>
+  <Card title="TanStack Router" icon="route">
+    File-based routing with full TypeScript type safety, route loaders, and context injection. Auto code-splitting is enabled via the Vite plugin.
+  </Card>
+  <Card title="TanStack Query" icon="database">
+    Server-state management with caching, background refetching, and first-class support for oRPC's `queryOptions` and `mutationOptions` helpers.
+  </Card>
+  <Card title="Tailwind CSS 4" icon="paintbrush">
+    Utility-first CSS with the `@tailwindcss/vite` plugin for zero-config integration. Animations are provided by `tw-animate-css`.
+  </Card>
+  <Card title="shadcn/ui" icon="layers">
+    Accessible component primitives built on Radix UI. Components live in `src/components/ui/` and are styled with `class-variance-authority`.
+  </Card>
+  <Card title="Vite" icon="zap">
+    Fast development server with HMR and an API proxy that forwards `/api` requests to the Hono backend on port 3000.
+  </Card>
+  <Card title="better-auth" icon="lock">
+    Client-side session management via `authClient`. Session state is injected into the router context so every route can read authentication status.
+  </Card>
+</CardGroup>
+
+## Vite configuration
+
+```typescript apps/web/vite.config.ts
+import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
+import viteReact from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [
+    tanstackRouter({ autoCodeSplitting: true }),
+    viteReact(),
+    tailwindcss(),
+  ],
+  resolve: {
+    alias: {
+      "@": resolve(__dirname, "./src"),
+    },
+  },
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
+    },
+  },
+  build: {
+    outDir: "../api/public",
+    emptyOutDir: true,
+  },
+});
+```
+
+<Note>
+  `autoCodeSplitting: true` instructs the TanStack Router Vite plugin to automatically split each route into its own bundle. The built output is written to `apps/api/public/` so the Hono server can serve the frontend as static files.
+</Note>
+
+## Developer tools
+
+In development mode, both TanStack Router Devtools and TanStack Query Devtools are mounted via the unified `TanStackDevtools` panel from `@tanstack/react-devtools`. They render only when `import.meta.env.DEV` is `true`.
+
+```typescript apps/web/src/routes/__root.tsx
+import { TanStackDevtools } from "@tanstack/react-devtools";
+import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
+
+{import.meta.env.DEV && (
+  <TanStackDevtools
+    config={{
+      position: "bottom-left",
+    }}
+    plugins={[
+      {
+        name: "Tanstack Router",
+        render: <TanStackRouterDevtoolsPanel />,
+      },
+      TanStackQueryDevtools,
+    ]}
+  />
+)}
+```
+
+The Query Devtools plugin is defined in `src/integrations/tanstack-query/devtools.tsx`:
+
+```typescript apps/web/src/integrations/tanstack-query/devtools.tsx
+import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
+
+export default {
+  name: "Tanstack Query",
+  render: <ReactQueryDevtoolsPanel />,
+};
+```
+
+## Source folder structure
+
+```text
+apps/web/src/
+├── main.tsx                          # App entry point, router + provider setup
+├── styles.css                        # Global Tailwind CSS styles
+├── reportWebVitals.ts                # Web Vitals instrumentation
+├── routeTree.gen.ts                  # Auto-generated route tree (do not edit)
+├── components/
+│   ├── ui/                           # shadcn/ui primitives
+│   ├── live-messages-status-indicator.tsx
+│   ├── message-box.tsx
+│   ├── message-input.tsx
+│   ├── new-channel.tsx
+│   └── ...                           # Other feature components
+├── integrations/
+│   └── tanstack-query/
+│       ├── root-provider.tsx         # QueryClient setup and Provider
+│       └── devtools.tsx              # Query Devtools plugin
+├── lib/
+│   ├── auth.ts                       # better-auth client
+│   ├── orpc-client.ts                # oRPC client + TanStack Query utils
+│   ├── utils.ts                      # Shared utilities (cn, etc.)
+│   ├── hooks/                        # Custom React hooks
+│   └── schema/                       # Zod schemas for forms
+├── providers/
+│   └── theme-provider.tsx            # next-themes ThemeProvider
+└── routes/
+    ├── __root.tsx                    # Root layout with devtools
+    ├── _auth/                        # Unauthenticated pages (sign-in, sign-up)
+    └── _protected/                   # Authenticated pages (chat, profile)
+```

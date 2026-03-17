@@ -1,0 +1,222 @@
+---
+title: "Database"
+description: "PostgreSQL with Drizzle ORM: table definitions, relations, automatic Zod schema generation, and migration commands."
+---
+
+The database layer lives in the `packages/db` workspace package and is shared across the monorepo. It uses [Drizzle ORM](https://orm.drizzle.team) with PostgreSQL.
+
+## Table definitions
+
+### Chat tables
+
+The three core tables — `channel`, `channelParticipant`, and `message` — are defined in `packages/db/src/tables/chat.ts`.
+
+```typescript packages/db/src/tables/chat.ts
+import {
+  json,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
+import { type ChannelSettings, channelSettingsSchema } from "../schema/custom";
+import { user } from "./auth";
+
+export const channel = pgTable("channel", {
+  uuid: uuid().notNull().primaryKey().defaultRandom(),
+  name: text().notNull(),
+  settings: json()
+    .notNull()
+    .default(channelSettingsSchema.parse({ ai: {} }))
+    .$type<ChannelSettings>(),
+  ownerId: text()
+    .notNull()
+    .references(() => user.id, {
+      onDelete: "cascade",
+    }),
+  createdAt: timestamp({ mode: "string", withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const channelRole = pgEnum("channel_role", ["owner", "member"]);
+
+export const channelParticipant = pgTable("channel_participant", {
+  userId: text()
+    .notNull()
+    .references(() => user.id, {
+      onDelete: "cascade",
+    }),
+  channelUuid: uuid()
+    .notNull()
+    .references(() => channel.uuid, {
+      onDelete: "cascade",
+    }),
+  role: channelRole().notNull().default("member"),
+  createdAt: timestamp({ mode: "string", withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const message = pgTable("message", {
+  uuid: uuid().notNull().primaryKey().defaultRandom(),
+  senderId: text()
+    .notNull()
+    .references(() => user.id, {
+      onDelete: "cascade",
+    }),
+  content: text().notNull(),
+  channelUuid: uuid()
+    .notNull()
+    .references(() => channel.uuid, {
+      onDelete: "cascade",
+    }),
+  createdAt: timestamp({ mode: "string", withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+```
+
+### Auth tables
+
+Better-Auth's tables are defined in `packages/db/src/tables/auth.ts`. The `user` table is referenced by all chat tables via foreign keys.
+
+```typescript packages/db/src/tables/auth.ts
+import { boolean, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+
+export const user = pgTable("user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified")
+    .$defaultFn(() => false)
+    .notNull(),
+  image: text("image"),
+  createdAt: timestamp("created_at")
+    .$defaultFn(() => new Date())
+    .notNull(),
+  updatedAt: timestamp("updated_at")
+    .$defaultFn(() => new Date())
+    .notNull(),
+});
+```
+
+## Relations
+
+Drizzle relations are defined in `packages/db/src/tables/relations.ts`. They enable the `with` option in queries for eager loading without writing explicit joins.
+
+```typescript packages/db/src/tables/relations.ts
+import { relations } from "drizzle-orm";
+import { user } from "../tables/auth";
+import { channel, channelParticipant, message } from "../tables/chat";
+
+export const userRelations = relations(user, ({ many }) => ({
+  messages: many(message),
+  channels: many(channel),
+}));
+
+export const channelRelations = relations(channel, ({ one, many }) => ({
+  owner: one(user, {
+    fields: [channel.ownerId],
+    references: [user.id],
+  }),
+  participants: many(channelParticipant),
+}));
+
+export const channelParticipantRelations = relations(
+  channelParticipant,
+  ({ one }) => ({
+    user: one(user, {
+      fields: [channelParticipant.userId],
+      references: [user.id],
+    }),
+    channel: one(channel, {
+      fields: [channelParticipant.channelUuid],
+      references: [channel.uuid],
+    }),
+  })
+);
+
+export const messageRelations = relations(message, ({ one }) => ({
+  sender: one(user, {
+    fields: [message.senderId],
+    references: [user.id],
+  }),
+  channel: one(channel, {
+    fields: [message.channelUuid],
+    references: [channel.uuid],
+  }),
+}));
+```
+
+## Automatic Zod schema generation
+
+`drizzle-zod` generates Zod schemas directly from Drizzle table definitions with `createSelectSchema`. This ensures the API contracts always stay in sync with the actual database columns — no manual schema duplication.
+
+```typescript packages/db/src/schema/derived.ts
+import { createSelectSchema } from "drizzle-zod";
+import type { z } from "zod/v4";
+import { channel, channelParticipant, message, user } from "../tables";
+
+export const channelSchema = createSelectSchema(channel).omit({
+  settings: true,
+});
+export type Channel = z.infer<typeof channelSchema>;
+
+export const channelParticipantSchema = createSelectSchema(channelParticipant);
+export type ChannelParticipant = z.infer<typeof channelParticipantSchema>;
+
+export const messageSchema = createSelectSchema(message);
+export type Message = z.infer<typeof messageSchema>;
+
+export const userSchema = createSelectSchema(user).pick({
+  email: true,
+  name: true,
+  image: true,
+  id: true,
+});
+export type User = z.infer<typeof userSchema>;
+```
+
+These schemas are imported directly into the oRPC contract files, so a column change in the table definition propagates as a TypeScript error all the way to the API contract and the frontend.
+
+## Drizzle config
+
+```typescript packages/db/drizzle.config.ts
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  out: "./drizzle",
+  schema: "./src/tables",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL!,
+  },
+  verbose: true,
+});
+```
+
+The `schema` field points to the `src/tables` directory, so Drizzle Kit picks up all table files automatically.
+
+## Database commands
+
+Run these from the `packages/db` directory or via the root `bun run` scripts:
+
+```bash
+# Generate a new migration from schema changes
+bun run db:generate
+
+# Apply pending migrations to the database
+bun run db:migrate
+
+# Push schema changes directly (no migration file, useful in development)
+bun run db:push
+
+# Open Drizzle Studio in the browser
+bun run db:studio
+```
+
+<Tip>
+  Use `bun run db:studio` to open Drizzle Studio — a visual database browser that lets you inspect and edit rows in every table directly from your browser. It reads `drizzle.config.ts` automatically and connects to the database at `DATABASE_URL`.
+</Tip>

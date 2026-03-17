@@ -1,0 +1,230 @@
+---
+title: "Data fetching with TanStack Query"
+description: "How the frontend uses the oRPC client and TanStack Query for type-safe data fetching, caching, and mutations."
+---
+
+All server communication goes through a single oRPC client that is configured once and exported from `src/lib/orpc-client.ts`. From there, `createTanstackQueryUtils` produces the `orpc` helper object that exposes `queryOptions`, `mutationOptions`, and `queryKey` for every endpoint.
+
+## Client setup
+
+```typescript apps/web/src/lib/orpc-client.ts
+import contract from "@hono-orpc/api/contract";
+import { createORPCClient } from "@orpc/client";
+import type { ContractRouterClient } from "@orpc/contract";
+import type { JsonifiedClient } from "@orpc/openapi-client";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { createTanstackQueryUtils } from "@orpc/tanstack-query";
+
+const link = new OpenAPILink(contract, {
+  url: `${window.location.origin}/api/rpc`,
+  eventIteratorKeepAliveEnabled: true,
+  eventIteratorKeepAliveInterval: 5000,
+  eventIteratorKeepAliveComment: "",
+});
+
+export const client: JsonifiedClient<ContractRouterClient<typeof contract>> =
+  createORPCClient(link);
+
+export const orpc = createTanstackQueryUtils(client);
+```
+
+- `OpenAPILink` wires the oRPC client to the `/api/rpc` endpoint using the fetch API. The `eventIterator*` options keep SSE connections alive — see [Real-time updates](/frontend/real-time-updates) for details.
+- `createORPCClient` builds a fully-typed client from the shared `contract` package.
+- `createTanstackQueryUtils` wraps the client and produces `queryOptions`, `mutationOptions`, and `queryKey` builders that are automatically keyed and typed per endpoint.
+
+## QueryClient configuration
+
+The `QueryClient` is created in `src/integrations/tanstack-query/root-provider.tsx` with a custom `staleTime` function:
+
+```typescript apps/web/src/integrations/tanstack-query/root-provider.tsx
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const QUERY_STALE_TIME = 300_000; // 5 minutes
+
+export function getContext() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        refetchOnWindowFocus: false,
+        staleTime: (query) => {
+          // always refetch messages
+          const flatQueryKeys = query.queryKey.flat();
+          if (
+            flatQueryKeys.includes("streamChannelMessages") ||
+            flatQueryKeys.includes("getChannelMessages")
+          ) {
+            return 0;
+          }
+          return QUERY_STALE_TIME;
+        },
+      },
+    },
+  });
+
+  return {
+    queryClient,
+  };
+}
+```
+
+<Note>
+  Message queries — `streamChannelMessages` and `getChannelMessages` — always have `staleTime: 0` so they are never served from cache without revalidation. All other queries are considered fresh for five minutes.
+</Note>
+
+## Route loaders
+
+Route loaders run on the server during navigation and call `queryClient.ensureQueryData()` to warm the cache before the component renders. This eliminates loading spinners for data that is already known at navigation time.
+
+```typescript apps/web/src/routes/_protected/_bottom-navigation/chat.tsx
+export const Route = createFileRoute("/_protected/_bottom-navigation/chat")({
+  loader: ({ context: { queryClient } }) =>
+    queryClient.ensureQueryData(orpc.chat.channel.getChannels.queryOptions()),
+  component: RouteComponent,
+});
+```
+
+For routes that need multiple queries in parallel, `Promise.all` is used inside the loader:
+
+```typescript apps/web/src/routes/_protected/chat.$uuid/index.tsx
+export const Route = createFileRoute("/_protected/chat/$uuid/")({
+  loader: async ({ context: { queryClient }, params }) => {
+    await Promise.all([
+      queryClient.ensureQueryData(
+        orpc.chat.channel.getChannel.queryOptions({
+          input: { uuid: params.uuid },
+        })
+      ),
+      queryClient.ensureQueryData(
+        orpc.chat.message.getChannelMessages.queryOptions({
+          input: { uuid: params.uuid },
+        })
+      ),
+    ]);
+  },
+  component: RouteComponent,
+});
+```
+
+## Reading data in components
+
+Because the loader pre-populates the cache, components can use `useSuspenseQuery` or `useSuspenseQueries` and the data is available immediately without a loading state.
+
+### Single query
+
+```typescript apps/web/src/routes/_protected/_bottom-navigation/chat.tsx
+function RouteComponent() {
+  const { data } = useSuspenseQuery(
+    orpc.chat.channel.getChannels.queryOptions()
+  );
+
+  return (
+    <main>
+      {data.map((channel) => (
+        <Link key={channel.uuid} params={{ uuid: channel.uuid }} to="/chat/$uuid">
+          #{channel.name}
+        </Link>
+      ))}
+    </main>
+  );
+}
+```
+
+### Parallel queries with `useSuspenseQueries`
+
+When a component needs data from multiple endpoints simultaneously, `useSuspenseQueries` fetches them in parallel and suspends until all are ready:
+
+```typescript apps/web/src/routes/_protected/chat.$uuid/index.tsx
+const [{ data: channel }, { data: messages }] = useSuspenseQueries({
+  queries: [
+    orpc.chat.channel.getChannel.queryOptions({ input: { uuid } }),
+    orpc.chat.message.getChannelMessages.queryOptions({
+      input: { uuid },
+    }),
+  ],
+});
+```
+
+## Mutations
+
+Mutations follow the same pattern: `orpc.<endpoint>.mutationOptions()` provides a fully-typed `useMutation` configuration.
+
+### Creating a channel
+
+```typescript apps/web/src/components/new-channel.tsx
+const queryClient = useQueryClient();
+
+const { mutateAsync: createChannel, isPending } = useMutation(
+  orpc.chat.channel.createChannel.mutationOptions({
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.chat.channel.getChannels.queryKey(),
+      });
+      form.reset();
+      setOpen(false);
+    },
+  })
+);
+```
+
+On success, `queryClient.invalidateQueries` is called with the typed `queryKey` from `orpc.chat.channel.getChannels.queryKey()`. TanStack Query marks those cache entries as stale and refetches them in the background.
+
+### Sending a message
+
+```typescript apps/web/src/components/message-input.tsx
+const { mutateAsync: sendMessage, isPending } = useMutation(
+  orpc.chat.message.sendMessageToChannel.mutationOptions({
+    onMutate: () => {
+      form.reset();
+    },
+    onSuccess: () => {
+      form.reset();
+    },
+  })
+);
+```
+
+<Tip>
+  `onMutate` resets the form immediately (optimistic UX) so the input field clears as soon as the user submits, without waiting for the server response.
+</Tip>
+
+### Leaving or deleting a channel
+
+Some mutations clean up multiple cache entries before navigating away:
+
+```typescript apps/web/src/routes/_protected/chat.$uuid/details.tsx
+function cleanupQueries() {
+  return Promise.all([
+    queryClient.removeQueries({
+      queryKey: orpc.chat.channel.getChannel.queryKey({
+        input: { uuid },
+      }),
+    }),
+    queryClient.removeQueries({
+      queryKey: orpc.chat.message.getChannelMessages.queryKey({
+        input: { uuid },
+      }),
+    }),
+    queryClient.invalidateQueries({
+      queryKey: orpc.chat.channel.getChannels.queryKey(),
+    }),
+  ]);
+}
+
+const { mutateAsync: leaveChannel } = useMutation(
+  orpc.chat.channel.leaveChannel.mutationOptions({
+    onSuccess: async () => {
+      await cleanupQueries();
+      navigate({ to: "/chat" });
+    },
+  })
+);
+
+const { mutateAsync: deleteChannel } = useMutation(
+  orpc.chat.channel.deleteChannel.mutationOptions({
+    onSuccess: async () => {
+      await cleanupQueries();
+      navigate({ to: "/chat" });
+    },
+  })
+);
+```

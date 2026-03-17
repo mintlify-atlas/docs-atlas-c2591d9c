@@ -1,0 +1,63 @@
+---
+title: "Create channel"
+description: "Create a new channel and add an initial set of members."
+---
+
+Creates a new channel owned by the authenticated user. The owner is automatically added as a participant with the `owner` role. All user IDs provided in `members` are added with the `member` role.
+
+```http
+POST /api/rpc/chat/channel
+```
+
+## Request
+
+<ParamField body="name" type="string" required>
+  Display name for the channel. Must be at least 1 character.
+</ParamField>
+
+<ParamField body="members" type="string[]" required>
+  Array of user IDs to add as members. Must contain at least 1 entry.
+</ParamField>
+
+## Response
+
+Returns the newly created `Channel` object with HTTP status `201 Created`.
+
+<ResponseField name="uuid" type="string">
+  Unique identifier (UUID) of the created channel.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the channel.
+</ResponseField>
+
+<ResponseField name="ownerId" type="string">
+  User ID of the channel owner (the authenticated user).
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the channel was created.
+</ResponseField>
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+| `INTERNAL_SERVER_ERROR` | The channel could not be created. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useMutation } from "@tanstack/react-query";
+
+const { mutate: createChannel } = useMutation(
+  orpc.chat.channel.createChannel.mutationOptions()
+);
+
+createChannel({
+  name: "general",
+  members: ["user_abc123", "user_def456"],
+});
+```

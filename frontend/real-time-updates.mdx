@@ -1,0 +1,154 @@
+---
+title: "Real-time updates"
+description: "How the chat room page streams live messages over SSE using TanStack Query's experimental_streamedQuery."
+---
+
+The chat room page combines two data sources: a one-time snapshot of historical messages loaded by the route loader, and a live stream of new messages delivered over Server-Sent Events (SSE). Both are managed through TanStack Query.
+
+## How SSE streaming works
+
+The oRPC `OpenAPILink` uses the Fetch API's streaming body to receive an `EventSource`-compatible SSE stream. When `streamChannelMessages` is called, the server keeps the HTTP connection open and pushes new messages as SSE events. The client accumulates them in the query cache.
+
+### Keep-alive configuration
+
+The `eventIterator*` options in `OpenAPILink` keep the SSE connection alive when the server sends heartbeat comments:
+
+```typescript apps/web/src/lib/orpc-client.ts
+const link = new OpenAPILink(contract, {
+  url: `${window.location.origin}/api/rpc`,
+  eventIteratorKeepAliveEnabled: true,
+  eventIteratorKeepAliveInterval: 5000,
+  eventIteratorKeepAliveComment: "",
+});
+```
+
+| Option | Value | Effect |
+|---|---|---|
+| `eventIteratorKeepAliveEnabled` | `true` | Enables processing of keep-alive comments from the server |
+| `eventIteratorKeepAliveInterval` | `5000` | Expects a keep-alive signal every 5 000 ms |
+| `eventIteratorKeepAliveComment` | `""` | Matches SSE comment lines (`: `) sent by the server |
+
+## Streaming query setup
+
+In `chat.$uuid/index.tsx`, the live stream is attached with `useQuery` and `experimental_streamedQuery`:
+
+```typescript apps/web/src/routes/_protected/chat.$uuid/index.tsx
+import {
+  experimental_streamedQuery,
+  useQuery,
+  useSuspenseQueries,
+} from "@tanstack/react-query";
+import { client, orpc } from "@/lib/orpc-client";
+
+const {
+  data: liveMessages,
+  isError: isLiveMessagesError,
+  fetchStatus: liveMessagesFetchStatus,
+} = useQuery({
+  queryKey: orpc.chat.message.streamChannelMessages.queryKey({
+    input: { uuid },
+  }),
+  // workaround for https://github.com/TanStack/query/releases/tag/v5.86.0 (queryFn -> streamFn)
+  // when fixes, use the commented out code below
+  queryFn: experimental_streamedQuery({
+    streamFn: ({ signal }) =>
+      client.chat.message.streamChannelMessages({ uuid }, { signal }),
+  }),
+});
+```
+
+<Note>
+  `experimental_streamedQuery` is a TanStack Query utility that converts an async iterator into a query function. Each SSE event appends to `data` rather than replacing it. The `signal` is forwarded so the stream is aborted when the component unmounts or the query is cancelled.
+</Note>
+
+<Info>
+  The `queryKey` is derived from the typed `orpc` helper so it remains consistent with the rest of the cache. When this workaround is resolved in a future TanStack Query release, the call can be replaced with `orpc.chat.streamChannelMessages.experimental_streamedOptions({ input: { uuid } })`.
+</Info>
+
+## Combining cached and live messages
+
+The route loader pre-fetches historical messages into the cache. The component reads both sources and renders them sequentially:
+
+```typescript apps/web/src/routes/_protected/chat.$uuid/index.tsx
+const [{ data: channel }, { data: messages }] = useSuspenseQueries({
+  queries: [
+    orpc.chat.channel.getChannel.queryOptions({ input: { uuid } }),
+    orpc.chat.message.getChannelMessages.queryOptions({
+      input: { uuid },
+    }),
+  ],
+});
+
+// messages  — historical snapshot from loader
+// liveMessages — accumulated SSE events
+
+<div className="space-y-2 p-4">
+  {messages.map((message) => (
+    <MessageBox key={message.uuid} message={message} />
+  ))}
+  {liveMessages?.map((message) => (
+    <MessageBox key={message.uuid} message={message} />
+  ))}
+</div>
+```
+
+Historical messages are rendered first, followed by live messages appended below them. The `useAutoScroll` hook keeps the viewport scrolled to the bottom as new messages arrive.
+
+## Connection status indicator
+
+The `fetchStatus` value from the streaming query is passed to `LiveMessagesStatusIndicator`, which displays a coloured badge in the channel header:
+
+```typescript apps/web/src/components/live-messages-status-indicator.tsx
+function LiveMessagesStatusIndicator({
+  isError,
+  fetchStatus,
+}: {
+  isError: boolean;
+  fetchStatus: FetchStatus;
+}) {
+  const status = isError
+    ? "error"
+    : fetchStatus === "idle"
+      ? "connecting"
+      : "connected";
+  const animated = status !== "error";
+
+  return (
+    <Badge className="flex items-center gap-1.5 capitalize" variant="outline">
+      <span className="relative flex size-2">
+        {animated && (
+          <span
+            className={cn(
+              "absolute inline-flex size-2 animate-ping rounded-full",
+              {
+                "bg-yellow-500": status === "connecting",
+                "bg-green-500": status === "connected",
+              }
+            )}
+          />
+        )}
+        <span
+          className={cn("relative inline-flex size-2 rounded-full", {
+            "bg-red-500": status === "error",
+            "bg-yellow-500": status === "connecting",
+            "bg-green-500": status === "connected",
+          })}
+        />
+      </span>
+      {status}
+    </Badge>
+  );
+}
+```
+
+### `liveMessagesFetchStatus` states
+
+| `fetchStatus` | `isError` | Displayed status | Badge colour |
+|---|---|---|---|
+| `"fetching"` | `false` | `connected` | Green (animated ping) |
+| `"idle"` | `false` | `connecting` | Yellow (animated ping) |
+| any | `true` | `error` | Red (static) |
+
+<Warning>
+  The `idle` state is treated as `connecting` rather than disconnected because TanStack Query briefly enters `idle` between refetch attempts. A red badge is only shown when `isError` is `true`, meaning the stream has definitively failed.
+</Warning>

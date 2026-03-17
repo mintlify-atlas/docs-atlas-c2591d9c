@@ -1,0 +1,155 @@
+---
+title: "Channel AI configuration"
+description: "Per-channel settings that control whether AI is enabled, which model is used, and how much history is sent."
+---
+
+Every channel stores an `ai` settings block in the database. These settings control whether the AI participant is active, which model it uses, and how many recent messages are included as context when generating a reply.
+
+## Schema
+
+The settings are validated with Zod at the database boundary.
+
+```typescript packages/db/src/schema/custom.ts
+import { availableModels } from "@hono-orpc/ai/types";
+import { z } from "zod/v4";
+
+export const channelSettingsSchema = z.object({
+  ai: z.object({
+    enabled: z.boolean().default(false),
+    model: z.enum(availableModels).default("openai/gpt-oss-120b:free"),
+    maxMessages: z.number().default(10),
+  }),
+});
+
+export type ChannelSettings = z.infer<typeof channelSettingsSchema>;
+```
+
+### Field reference
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | When `false`, the server skips AI processing even if a message contains `@ai`. |
+| `model` | `OpenRouterModel` | `"openai/gpt-oss-120b:free"` | The LLM to use for responses. Must be one of the values in `availableModels`. |
+| `maxMessages` | `number` | `10` | How many recent messages to fetch from the channel and pass as context. |
+
+<Warning>
+  Setting `maxMessages` to a large value sends more tokens to the model on every `@ai` mention. This increases latency and costs. Keep the value as small as needed for coherent context — the default of `10` is a reasonable starting point.
+</Warning>
+
+## API endpoints
+
+Two endpoints manage channel settings. Both are restricted to the channel owner.
+
+### Get channel settings
+
+```text
+GET /chat/channel/{uuid}/settings
+```
+
+Returns the full `channelSettingsSchema` object for the given channel.
+
+**Errors:**
+
+| Code | Description |
+| --- | --- |
+| `UNAUTHORIZED` | The request is not authenticated. |
+| `FORBIDDEN` | The authenticated user is not the channel owner. |
+| `NOT_FOUND` | No channel with the given UUID exists. |
+
+### Set channel settings
+
+```text
+POST /chat/channel/{uuid}/settings
+```
+
+Replaces the channel's settings with the provided body and returns the saved settings.
+
+**Request body:**
+
+```json
+{
+  "uuid": "<channel-uuid>",
+  "settings": {
+    "ai": {
+      "enabled": true,
+      "model": "x-ai/grok-4-fast:free",
+      "maxMessages": 15
+    }
+  }
+}
+```
+
+**Errors:**
+
+| Code | Description |
+| --- | --- |
+| `UNAUTHORIZED` | The request is not authenticated. |
+| `FORBIDDEN` | The authenticated user is not the channel owner. |
+
+## Role-based access
+
+Both the `getChannelSettings` and `setChannelSettings` handlers apply `userIsChannelOwnerMiddleware` before executing.
+
+```typescript apps/api/src/modules/chat/channel/channel.router.ts
+const getChannelSettings = chatRouter.getChannelSettings
+  .use(authMiddleware)
+  .use(userIsChannelOwnerMiddleware)
+  .handler(async ({ input, errors }) => {
+    const ch = await db.query.channel.findFirst({
+      where: eq(channel.uuid, input.uuid),
+    });
+
+    if (!ch) {
+      throw errors.NOT_FOUND();
+    }
+
+    return ch.settings;
+  });
+
+const setChannelSettings = chatRouter.setChannelSettings
+  .use(authMiddleware)
+  .use(userIsChannelOwnerMiddleware)
+  .handler(async ({ input }) => {
+    await db
+      .update(channel)
+      .set({ settings: input.settings })
+      .where(eq(channel.uuid, input.uuid));
+
+    return input.settings;
+  });
+```
+
+Regular channel members cannot read or modify AI settings. Only the user who created the channel (assigned the `owner` role in `channelParticipant`) can access these endpoints.
+
+## How settings are read at message time
+
+When a message containing `@ai` is received, the handler fetches the channel record and checks `settings.ai.enabled` before doing any further work.
+
+```typescript apps/api/src/modules/chat/message/message.router.ts
+if (input.content.includes("@ai")) {
+  const ch = await db.query.channel.findFirst({
+    where: eq(channel.uuid, input.uuid),
+  });
+
+  if (!ch) {
+    throw errors.INTERNAL_SERVER_ERROR();
+  }
+
+  if (!ch.settings.ai.enabled) {
+    console.log(
+      `[sendMessageToChannel] AI is not enabled for channel: ${input.uuid}`
+    );
+    return msg;
+  }
+
+  const aiResponse = await generateAIResponse(input.uuid, ch.settings.ai);
+
+  await saveAndPublishMessage({
+    channelUuid: input.uuid,
+    content: aiResponse,
+    sender: CHAT_AI_USER,
+  });
+}
+```
+
+The entire `ch.settings.ai` object — including `model` and `maxMessages` — is forwarded to `generateAIResponse`, which uses it to query the database and call the correct model.

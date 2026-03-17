@@ -1,0 +1,125 @@
+---
+title: "AI models"
+description: "Supported LLMs, their capabilities, and how OpenRouter routes requests."
+---
+
+All LLM requests are routed through [OpenRouter](https://openrouter.ai), which provides a unified API for multiple model providers. The `@hono-orpc/ai` package hard-codes the list of supported models so that per-channel configuration remains constrained to known-good options.
+
+## Supported models
+
+The `availableModels` tuple and `availableModelsInfo` map are defined in `packages/ai/src/types.ts`.
+
+```typescript packages/ai/src/types.ts
+export const availableModels = [
+  "openai/gpt-oss-20b:free",
+  "openai/gpt-oss-120b:free",
+  "x-ai/grok-4-fast:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+  "moonshotai/kimi-k2:free",
+] as const;
+
+export type OpenRouterModel = (typeof availableModels)[number];
+
+export type OpenRouterModelInfo = {
+  tools: boolean;
+  name: string;
+};
+
+export const availableModelsInfo: Record<OpenRouterModel, OpenRouterModelInfo> =
+  {
+    "openai/gpt-oss-20b:free": {
+      tools: false,
+      name: "OpenAI GPT-OSS 20B",
+    },
+    "openai/gpt-oss-120b:free": {
+      tools: false,
+      name: "OpenAI GPT-OSS 120B",
+    },
+    "x-ai/grok-4-fast:free": {
+      tools: true,
+      name: "Grok 4 Fast",
+    },
+    "nvidia/nemotron-nano-9b-v2:free": {
+      tools: true,
+      name: "Nemotron Nano 9B v2",
+    },
+    "moonshotai/kimi-k2:free": {
+      tools: true,
+      name: "Kimi K2",
+    },
+  };
+```
+
+## Capability matrix
+
+| Model ID | Display name | Tool calling |
+| --- | --- | --- |
+| `openai/gpt-oss-20b:free` | OpenAI GPT-OSS 20B | No |
+| `openai/gpt-oss-120b:free` | OpenAI GPT-OSS 120B | No |
+| `x-ai/grok-4-fast:free` | Grok 4 Fast | Yes |
+| `nvidia/nemotron-nano-9b-v2:free` | Nemotron Nano 9B v2 | Yes |
+| `moonshotai/kimi-k2:free` | Kimi K2 | Yes |
+
+All models are served on OpenRouter's free tier (`:free` suffix). Response quality and rate limits vary by model.
+
+## OpenRouter setup
+
+The OpenRouter client is instantiated once at module load time using the `OPENROUTER_API_KEY` environment variable.
+
+```typescript packages/ai/src/index.ts
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { generateText, type ModelMessage, stepCountIs } from "ai";
+import * as tools from "./tools";
+import { availableModelsInfo, type OpenRouterModel } from "./types";
+import { SYSTEM_PROMPT } from "./utils";
+
+const openRouter = createOpenRouter({
+  apiKey: process.env.OPENROUTER_API_KEY,
+});
+```
+
+Set this environment variable in your `.env` file or deployment environment:
+
+```bash
+OPENROUTER_API_KEY=sk-or-...
+```
+
+## Model selection in `generateResponse`
+
+The selected model drives two decisions: which OpenRouter endpoint to call, and whether tools are attached to the request.
+
+```typescript packages/ai/src/index.ts
+export function generateResponse({
+  messages,
+  model = "openai/gpt-oss-120b:free",
+}: {
+  messages: ModelMessage[];
+  model?: OpenRouterModel;
+}) {
+  const modelInfo = availableModelsInfo[model];
+
+  return generateText({
+    model: openRouter(model),
+    system: SYSTEM_PROMPT,
+    stopWhen: stepCountIs(10),
+    ...(modelInfo.tools && { tools }),
+    messages,
+  });
+}
+```
+
+The default model is `openai/gpt-oss-120b:free`. When a channel has not been explicitly configured, this model is used.
+
+### `enableTools` logic
+
+The `tools` object is conditionally spread into the `generateText` call:
+
+```typescript
+...(modelInfo.tools && { tools })
+```
+
+If `modelInfo.tools` is `false` (as it is for the two GPT-OSS models), no tools are passed and the model responds with a plain text reply. If `modelInfo.tools` is `true`, the full tools object is available for the model to call. See [Tool calling](/ai/tool-calling) for a description of each tool.
+
+<Note>
+  `stopWhen: stepCountIs(10)` caps the agentic loop at 10 steps. Without this guard, a model repeatedly calling tools could run indefinitely and exhaust your OpenRouter credits.
+</Note>

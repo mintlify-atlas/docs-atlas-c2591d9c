@@ -1,0 +1,42 @@
+---
+title: "Leave channel"
+description: "Remove yourself from a channel as a member."
+---
+
+Removes the authenticated user from the specified channel. The user must currently be a member of the channel.
+
+```http
+POST /api/rpc/chat/channel/{uuid}/leave
+```
+
+## Request
+
+<ParamField path="uuid" type="string" required>
+  UUID of the channel to leave.
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on success. No response body is returned.
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+| `FORBIDDEN` | You are not a member of this channel. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useMutation } from "@tanstack/react-query";
+
+const { mutate: leaveChannel } = useMutation(
+  orpc.chat.channel.leaveChannel.mutationOptions()
+);
+
+leaveChannel({
+  uuid: "018e4c7f-3b2a-7000-8abc-def012345678",
+});
+```

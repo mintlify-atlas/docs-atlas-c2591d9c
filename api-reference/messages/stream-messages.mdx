@@ -1,0 +1,103 @@
+---
+title: "Stream messages"
+description: "Subscribe to a real-time stream of new messages in a channel using Server-Sent Events."
+---
+
+```bash
+GET /chat/channel/{uuid}/message/stream
+```
+
+<Info>Authentication is required. You must be a member of the channel to subscribe to its message stream.</Info>
+
+This endpoint uses [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) (SSE) via oRPC's `eventIterator`. The connection stays open until the client disconnects — the server pushes each new message as it is published.
+
+## Path parameters
+
+<ParamField path="uuid" type="string" required>
+  The UUID of the channel to stream messages from.
+</ParamField>
+
+## Response
+
+Each streamed event is a message object extended with a `sender` field, identical in shape to the items returned by [Get messages](/api-reference/messages/get-messages).
+
+<ResponseField name="uuid" type="string">
+  Unique identifier of the message.
+</ResponseField>
+
+<ResponseField name="senderId" type="string">
+  ID of the user who sent the message.
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Text content of the message.
+</ResponseField>
+
+<ResponseField name="channelUuid" type="string">
+  UUID of the channel this message belongs to.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the message was created.
+</ResponseField>
+
+<ResponseField name="sender" type="object | null">
+  The user who sent the message, or `null` if the sender no longer exists.
+
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      Unique identifier of the user.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Email address of the user.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Display name of the user.
+    </ResponseField>
+    <ResponseField name="image" type="string | null">
+      URL of the user's profile image.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Errors
+
+| Status | Code | Description |
+| --- | --- | --- |
+| 401 | `UNAUTHORIZED` | The request is not authenticated. |
+| 403 | `FORBIDDEN` | You are not a member of this channel. |
+
+## TypeScript example
+
+<Info>
+  The client must set `eventIteratorKeepAliveEnabled: true` and `eventIteratorKeepAliveInterval: 5000` in the oRPC client configuration to keep the SSE connection alive.
+</Info>
+
+```typescript
+import { experimental_streamedQuery } from '@tanstack/react-query'
+import { client } from '@/lib/orpc'
+import { useQuery } from '@tanstack/react-query'
+
+function StreamedMessages({ channelUuid }: { channelUuid: string }) {
+  const { data: messages } = useQuery(
+    experimental_streamedQuery({
+      queryFn: ({ signal }) =>
+        client.chat.message.streamChannelMessages(
+          { uuid: channelUuid },
+          { signal }
+        ),
+      queryKey: ['stream', 'channel', channelUuid, 'messages'],
+    })
+  )
+
+  return (
+    <ul>
+      {messages?.map((message) => (
+        <li key={message.uuid}>
+          <strong>{message.sender?.name ?? 'Unknown'}</strong>: {message.content}
+        </li>
+      ))}
+    </ul>
+  )
+}
+```

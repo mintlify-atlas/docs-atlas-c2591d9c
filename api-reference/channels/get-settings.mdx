@@ -1,0 +1,59 @@
+---
+title: "Get channel settings"
+description: "Retrieve the settings for a channel. Only the channel owner can perform this action."
+---
+
+Returns the current settings for a channel. The authenticated user must be the owner of the channel.
+
+```http
+GET /api/rpc/chat/channel/{uuid}/settings
+```
+
+## Request
+
+<ParamField path="uuid" type="string" required>
+  UUID of the channel whose settings to retrieve.
+</ParamField>
+
+## Response
+
+Returns a `ChannelSettings` object.
+
+<ResponseField name="ai" type="object">
+  AI assistant configuration for the channel.
+
+  <Expandable title="properties">
+    <ResponseField name="enabled" type="boolean">
+      Whether the AI assistant is enabled in this channel. Defaults to `false`.
+    </ResponseField>
+
+    <ResponseField name="model" type="string">
+      The AI model used by the assistant. One of the available model identifiers. Defaults to `"openai/gpt-oss-120b:free"`.
+    </ResponseField>
+
+    <ResponseField name="maxMessages" type="number">
+      Maximum number of messages sent to the AI as context. Defaults to `10`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+| `FORBIDDEN` | You are not the owner of this channel. |
+| `NOT_FOUND` | Channel not found. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useSuspenseQuery } from "@tanstack/react-query";
+
+const { data: settings } = useSuspenseQuery(
+  orpc.chat.channel.getChannelSettings.queryOptions({
+    uuid: "018e4c7f-3b2a-7000-8abc-def012345678",
+  })
+);
+```

@@ -1,0 +1,101 @@
+---
+title: "Get channel"
+description: "Retrieve a single channel by UUID, including its participants."
+---
+
+Returns a channel by its UUID. The authenticated user must be a member of the channel. The response includes a `participants` array with full user details for each member.
+
+```http
+GET /api/rpc/chat/channel/{uuid}
+```
+
+## Request
+
+<ParamField path="uuid" type="string" required>
+  UUID of the channel to retrieve.
+</ParamField>
+
+## Response
+
+Returns a `Channel` object extended with a `participants` array.
+
+<ResponseField name="uuid" type="string">
+  Unique identifier (UUID) of the channel.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the channel.
+</ResponseField>
+
+<ResponseField name="ownerId" type="string">
+  User ID of the channel owner.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the channel was created.
+</ResponseField>
+
+<ResponseField name="participants" type="ChannelParticipant[] | null">
+  List of participants in the channel, or `null`.
+
+  <Expandable title="properties">
+    <ResponseField name="userId" type="string">
+      User ID of the participant.
+    </ResponseField>
+
+    <ResponseField name="channelUuid" type="string">
+      UUID of the channel this participant belongs to.
+    </ResponseField>
+
+    <ResponseField name="role" type="owner | member">
+      Role of the participant in the channel.
+    </ResponseField>
+
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp of when the participant joined.
+    </ResponseField>
+
+    <ResponseField name="user" type="User | null">
+      User details for this participant, or `null`.
+
+      <Expandable title="properties">
+        <ResponseField name="id" type="string">
+          Unique user ID.
+        </ResponseField>
+
+        <ResponseField name="name" type="string">
+          Display name of the user.
+        </ResponseField>
+
+        <ResponseField name="email" type="string">
+          Email address of the user.
+        </ResponseField>
+
+        <ResponseField name="image" type="string | null">
+          URL of the user's avatar image.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+| `FORBIDDEN` | You are not a member of this channel. |
+| `NOT_FOUND` | Channel not found. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useSuspenseQuery } from "@tanstack/react-query";
+
+const { data: channel } = useSuspenseQuery(
+  orpc.chat.channel.getChannel.queryOptions({
+    uuid: "018e4c7f-3b2a-7000-8abc-def012345678",
+  })
+);
+```

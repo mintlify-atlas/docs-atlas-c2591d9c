@@ -1,0 +1,123 @@
+---
+title: "Real-time streaming"
+description: "Server-Sent Events via oRPC's eventIterator and EventPublisher for live message delivery."
+---
+
+New messages are pushed to connected clients in real time using Server-Sent Events (SSE). oRPC's `eventIterator` output type and `EventPublisher` class handle the streaming without any additional infrastructure.
+
+## How it works
+
+When a client opens a stream for a channel, it holds an open HTTP connection. When any user sends a message to that channel, `publisher.publish()` fans the message out to every subscriber. Each subscriber's generator yields the message, which SSE delivers to the client.
+
+## Streaming contract
+
+The streaming endpoint is declared with `eventIterator()` as its output type. This tells oRPC to treat the response as an event stream rather than a single JSON payload.
+
+```typescript apps/api/src/modules/chat/message/message.contract.ts
+import { messageSchema, userSchema } from "@hono-orpc/db/schema";
+import { eventIterator, oc } from "@orpc/contract";
+import { z } from "zod/v4";
+
+const streamChannelMessages = messageContract
+  .route({
+    method: "GET",
+    description: "Stream messages by channel",
+    path: "/chat/channel/{uuid}/message/stream",
+  })
+  .errors({
+    FORBIDDEN: {
+      message: "You are not a member of this channel",
+    },
+  })
+  .input(z.object({ uuid: z.uuid().describe("The uuid of the channel") }))
+  .output(
+    eventIterator(messageSchema.extend({ sender: userSchema.nullable() }))
+  );
+```
+
+`eventIterator()` wraps any Zod schema to indicate that the handler will return an async generator of that type.
+
+## EventPublisher
+
+A single `EventPublisher` instance is created at module level and shared across all handler invocations. It acts as an in-process pub/sub bus keyed by channel UUID.
+
+```typescript apps/api/src/modules/chat/message/message.router.ts
+import { EventPublisher, implement } from "@orpc/server";
+import type { Message, User } from "@hono-orpc/db/schema";
+
+const publisher = new EventPublisher<
+  Record<string, Message & { sender: User | null }>
+>();
+```
+
+The type parameter maps channel UUIDs (strings) to the message payload type.
+
+## Publishing messages
+
+When a message is saved to the database, `publisher.publish()` is called with the channel UUID and the full message payload including the sender.
+
+```typescript apps/api/src/modules/chat/message/message.router.ts
+const saveAndPublishMessage = async ({
+  channelUuid,
+  content,
+  sender,
+}: {
+  channelUuid: string;
+  content: string;
+  sender: User;
+}) => {
+  const [msg] = await db
+    .insert(message)
+    .values({
+      channelUuid,
+      content,
+      senderId: sender.id,
+    })
+    .returning();
+
+  if (!msg) {
+    console.error(
+      `[saveAndPublishMessage] Failed to save message: ${JSON.stringify({ channelUuid, content, sender })}`
+    );
+    return null;
+  }
+
+  publisher.publish(channelUuid, {
+    ...msg,
+    sender,
+  });
+
+  return msg;
+};
+```
+
+This function is called by both the regular `sendMessageToChannel` handler and the AI response path, so all messages — human and AI — go through the same publish pipeline.
+
+## Streaming handler
+
+The streaming handler is an async generator function. It subscribes to the publisher for the requested channel and yields each event to the client.
+
+```typescript apps/api/src/modules/chat/message/message.router.ts
+const streamChannelMessages = messageRouter.streamChannelMessages
+  .use(authMiddleware)
+  .use(userInChannelMiddleware)
+  .handler(async function* ({ input, signal }) {
+    for await (const payload of publisher.subscribe(input.uuid, {
+      signal,
+    })) {
+      yield payload;
+    }
+  });
+```
+
+### The generator pattern
+
+The `function*` syntax marks this as a generator function. Each `yield` sends one event to the client over the open SSE connection. The `for await` loop blocks until the publisher emits the next value, then yields it immediately.
+
+### Cleanup with signal
+
+The `signal` argument is an `AbortSignal` tied to the HTTP request lifetime. When the client disconnects — by closing the browser tab, navigating away, or calling `EventSource.close()` — the signal is aborted. Passing it to `publisher.subscribe()` causes the subscription to clean up automatically, preventing memory leaks from stale subscribers.
+
+<Note>
+  `EventPublisher` is an in-process pub/sub mechanism. It works correctly for a single server instance. If you scale to multiple server instances, you would need to replace it with a shared transport such as Redis Pub/Sub.
+</Note>

@@ -1,0 +1,96 @@
+---
+title: "Set channel settings"
+description: "Update the settings for a channel. Only the channel owner can perform this action."
+---
+
+Updates the settings for a channel and returns the saved settings. The authenticated user must be the owner of the channel.
+
+```http
+POST /api/rpc/chat/channel/{uuid}/settings
+```
+
+## Request
+
+<ParamField path="uuid" type="string" required>
+  UUID of the channel whose settings to update.
+</ParamField>
+
+<ParamField body="settings" type="object" required>
+  The new settings to apply to the channel.
+
+  <Expandable title="properties">
+    <ParamField body="ai" type="object" required>
+      AI assistant configuration.
+
+      <Expandable title="properties">
+        <ParamField body="enabled" type="boolean" required>
+          Set to `true` to enable the AI assistant in this channel.
+        </ParamField>
+
+        <ParamField body="model" type="string" required>
+          AI model to use. Must be one of:
+          - `"openai/gpt-oss-20b:free"`
+          - `"openai/gpt-oss-120b:free"`
+          - `"x-ai/grok-4-fast:free"`
+          - `"nvidia/nemotron-nano-9b-v2:free"`
+          - `"moonshotai/kimi-k2:free"`
+        </ParamField>
+
+        <ParamField body="maxMessages" type="number" required>
+          Maximum number of recent messages to include as context when calling the AI.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Response
+
+Returns the updated `ChannelSettings` object.
+
+<ResponseField name="ai" type="object">
+  AI assistant configuration for the channel.
+
+  <Expandable title="properties">
+    <ResponseField name="enabled" type="boolean">
+      Whether the AI assistant is enabled in this channel.
+    </ResponseField>
+
+    <ResponseField name="model" type="string">
+      The AI model used by the assistant.
+    </ResponseField>
+
+    <ResponseField name="maxMessages" type="number">
+      Maximum number of messages used as AI context.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+| `FORBIDDEN` | You are not the owner of this channel. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useMutation } from "@tanstack/react-query";
+
+const { mutate: setSettings } = useMutation(
+  orpc.chat.channel.setChannelSettings.mutationOptions()
+);
+
+setSettings({
+  uuid: "018e4c7f-3b2a-7000-8abc-def012345678",
+  settings: {
+    ai: {
+      enabled: true,
+      model: "openai/gpt-oss-120b:free",
+      maxMessages: 20,
+    },
+  },
+});
+```

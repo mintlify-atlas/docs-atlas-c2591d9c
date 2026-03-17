@@ -1,0 +1,89 @@
+---
+title: "Introduction"
+description: "A modern TypeScript full-stack chat application showcasing end-to-end type safety with Hono, oRPC, Drizzle ORM, Better-Auth, TanStack Router/Query, and Vercel AI SDK."
+---
+
+## What is Hono oRPC Chat?
+
+Hono oRPC Chat is a production-grade full-stack chat application built as a showcase of the latest TypeScript ecosystem libraries. It demonstrates best practices for building type-safe, real-time applications where types flow seamlessly from the database all the way to the UI.
+
+The project is a monorepo using Bun workspaces, with a Hono backend, React frontend, and shared packages for database and AI utilities.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo and have the app running in minutes
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/project-structure">
+    Understand the monorepo layout and workspace setup
+  </Card>
+  <Card title="Backend" icon="server" href="/backend/overview">
+    Hono + oRPC for type-safe API development
+  </Card>
+  <Card title="Frontend" icon="browser" href="/frontend/overview">
+    React 19 with TanStack Router and Query
+  </Card>
+  <Card title="AI Integration" icon="microchip-ai" href="/ai/overview">
+    Vercel AI SDK with multi-model support and tool calling
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/channels/get-channels">
+    Full REST API documentation for all endpoints
+  </Card>
+</CardGroup>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="End-to-end type safety" icon="shield-check">
+    oRPC contracts ensure types are consistent from database schema to UI components — zero type gaps, compile-time error detection across the entire stack.
+  </Card>
+  <Card title="Real-time messaging" icon="bolt">
+    Server-Sent Events with type-safe `EventPublisher` for instant message delivery across all connected clients.
+  </Card>
+  <Card title="AI assistant" icon="robot">
+    Mention `@ai` in any enabled channel to trigger context-aware AI responses. Supports multiple OpenRouter models with tool calling.
+  </Card>
+  <Card title="Authentication" icon="lock">
+    Better-Auth with email/password and Google OAuth. CSRF protection, secure sessions, and rate limiting built in.
+  </Card>
+  <Card title="File-based routing" icon="route">
+    TanStack Router with full TypeScript integration — compile-time route validation, loaders, and nested layouts.
+  </Card>
+  <Card title="Channel management" icon="users">
+    Create and manage channels with role-based permissions. Owners can add/remove members and configure AI settings per channel.
+  </Card>
+</CardGroup>
+
+## Technology stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | [Bun](https://bun.sh) |
+| Backend framework | [Hono](https://hono.dev) |
+| API layer | [oRPC](https://orpc.unnoq.com) |
+| Database ORM | [Drizzle ORM](https://orm.drizzle.team) |
+| Authentication | [Better-Auth](https://better-auth.com) |
+| Frontend framework | React 19 |
+| Routing | [TanStack Router](https://tanstack.com/router) |
+| Data fetching | [TanStack Query](https://tanstack.com/query) |
+| AI SDK | [Vercel AI SDK](https://sdk.vercel.ai) |
+| AI models | [OpenRouter](https://openrouter.ai) |
+| Styling | Tailwind CSS 4 + shadcn/ui |
+| Schema validation | Zod v4 |
+| Build tool | Vite |
+| Linting | Biome |
+
+## Architecture overview
+
+The application follows a contract-first API design pattern:
+
+1. **Contracts** define the shape of every API call using Zod schemas and oRPC's `oc` builder
+2. **Handlers** implement the contracts with full type inference from the contract definition
+3. **Client** uses the same contract to generate type-safe TanStack Query hooks automatically
+
+This means a change to an API contract instantly produces a TypeScript error at every affected call site — frontend and backend — before any code runs.
+
+```
+Contract (Zod + oRPC) → Handler (Hono) → Client (TanStack Query)
+         ↑                                        ↑
+         └──────── Shared type inference ─────────┘
+```

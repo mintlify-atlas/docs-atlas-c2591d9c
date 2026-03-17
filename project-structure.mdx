@@ -1,0 +1,123 @@
+---
+title: "Project structure"
+description: "An overview of the Bun workspaces monorepo layout and how the apps and packages relate to each other."
+---
+
+Hono oRPC Chat is organized as a **Bun workspaces monorepo**. All apps and shared packages live in a single repository, share a single `node_modules` tree, and are linked to each other via workspace references.
+
+## Directory layout
+
+```text
+hono-orpc/
+├── apps/
+│   ├── api/          # Hono backend server
+│   └── web/          # React frontend application
+├── packages/
+│   ├── db/           # Drizzle ORM schema and database utilities
+│   └── ai/           # AI tools and model integrations
+└── playgrounds/
+    └── ai/           # AI experimentation playground
+```
+
+The root `package.json` declares the workspaces and the top-level scripts used during development:
+
+```json package.json
+{
+  "name": "hono-orpc",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "playgrounds/*"
+  ],
+  "scripts": {
+    "api": "bun --cwd apps/api dev",
+    "web": "bun --cwd apps/web dev",
+    "db:generate": "bun run --cwd packages/db db:generate",
+    "db:migrate": "bun run --cwd packages/db db:migrate",
+    "db:studio": "bun run --cwd packages/db db:studio"
+  }
+}
+```
+
+## Workspace packages
+
+<CardGroup cols={2}>
+  <Card title="apps/api" icon="server">
+    The Hono backend server (`@hono-orpc/api`). Defines oRPC contracts, implements route handlers, manages authentication via Better-Auth, and exposes a Server-Sent Events endpoint for real-time message streaming. Depends on `@hono-orpc/db` and `@hono-orpc/ai`.
+  </Card>
+  <Card title="apps/web" icon="browser">
+    The React frontend (`@hono-orpc/web`). Built with Vite, TanStack Router for file-based routing, and TanStack Query for data fetching. Imports the oRPC contract from `@hono-orpc/api` to generate type-safe query hooks at build time.
+  </Card>
+  <Card title="packages/db" icon="database">
+    The shared database package (`@hono-orpc/db`). Contains the Drizzle ORM table definitions, relations, Zod schemas derived from those tables, and the Drizzle client instance. Exports three entry points: `.` (client), `./schema` (Zod schemas), and `./tables` (Drizzle table objects).
+  </Card>
+  <Card title="packages/ai" icon="microchip-ai">
+    The shared AI package (`@hono-orpc/ai`). Wraps the Vercel AI SDK and the OpenRouter provider. Exports the `generateResponse` function and the tool definitions (e.g., weather lookup) used by the API when the AI assistant is mentioned in a channel.
+  </Card>
+</CardGroup>
+
+## Workspace references
+
+Packages within the monorepo reference each other using the `workspace:*` protocol instead of a published version number. Bun resolves these to the local package on disk at install time.
+
+```json apps/api/package.json
+{
+  "dependencies": {
+    "@hono-orpc/ai": "workspace:*",
+    "@hono-orpc/db": "workspace:*"
+  }
+}
+```
+
+```json apps/web/package.json
+{
+  "dependencies": {
+    "@hono-orpc/api": "workspace:*",
+    "@hono-orpc/db": "workspace:*"
+  }
+}
+```
+
+Because `apps/web` depends on `@hono-orpc/api`, the web app can import the oRPC contract directly:
+
+```typescript apps/web/src/lib/orpc-client.ts
+import contract from "@hono-orpc/api/contract";
+import { createORPCClient } from "@orpc/client";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { createTanstackQueryUtils } from "@orpc/tanstack-query";
+
+const link = new OpenAPILink(contract, {
+  url: `${window.location.origin}/api/rpc`,
+  eventIteratorKeepAliveEnabled: true,
+  eventIteratorKeepAliveInterval: 5000,
+});
+
+export const client = createORPCClient(link);
+export const orpc = createTanstackQueryUtils(client);
+```
+
+## Shared type safety
+
+The monorepo layout enables types to flow across all boundaries without any manual duplication:
+
+1. **Database → shared schemas**: `packages/db` uses `drizzle-zod` to derive Zod schemas and TypeScript types directly from Drizzle table definitions.
+2. **Shared schemas → API contracts**: `apps/api` imports those Zod schemas to define oRPC input/output contracts.
+3. **API contracts → frontend hooks**: `apps/web` imports the same contracts to generate TanStack Query hooks via `createTanstackQueryUtils`.
+
+A change to a column in `packages/db` instantly produces TypeScript errors at every affected call site — in API handlers and in frontend components — before any code runs.
+
+```
+packages/db (Drizzle tables)
+    │
+    ▼
+  Zod schemas + TypeScript types
+    │
+    ▼
+apps/api  (oRPC contracts + handlers)
+    │
+    ▼
+  Shared contract
+    │
+    ▼
+apps/web  (TanStack Query hooks)
+```

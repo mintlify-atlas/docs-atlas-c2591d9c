@@ -1,0 +1,272 @@
+---
+title: "Tool calling"
+description: "How the AI uses server-side tools to answer questions about weather, dates, and calculations."
+---
+
+Tool calling lets the AI execute server-side functions before composing its reply. The Vercel AI SDK handles the call-and-response loop automatically: the model emits a tool call, the SDK executes the matching function, and the result is fed back to the model as context.
+
+Tools are only available to models whose `tools` flag is `true` in `availableModelsInfo`. See [AI models](/ai/models) for the full list.
+
+## Tool definition pattern
+
+Every tool is created with the `tool()` helper from the `ai` package. The function takes a `description`, an `inputSchema` defined with Zod, and an `execute` function.
+
+```typescript
+import { tool } from "ai";
+import { z } from "zod/v4";
+
+export const myTool = tool({
+  description: "What this tool does",
+  inputSchema: z.object({
+    param: z.string().describe("Description of the parameter"),
+  }),
+  execute: async ({ param }) => {
+    // perform work, return a value
+    return result;
+  },
+});
+```
+
+The `description` is sent to the model so it knows when to call the tool. The `inputSchema` is converted to a JSON Schema for the model and validated at runtime.
+
+## Built-in tools
+
+### Calculator
+
+Performs basic arithmetic between two numbers.
+
+```typescript packages/ai/src/tools/calculator.ts
+import { tool } from "ai";
+import { z } from "zod/v4";
+
+export const calculator = tool({
+  description: "A calculator tool",
+  inputSchema: z.object({
+    a: z.number(),
+    b: z.number(),
+    operation: z.enum(["add", "subtract", "multiply", "divide", "power"]),
+  }),
+  execute: ({ a, b, operation }) => {
+    switch (operation) {
+      case "add":
+        return a + b;
+      case "subtract":
+        return a - b;
+      case "multiply":
+        return a * b;
+      case "divide":
+        return a / b;
+      case "power":
+        return a ** b;
+      default:
+        throw new Error("Invalid operation");
+    }
+  },
+});
+```
+
+### Date and time
+
+Two tools cover temporal queries.
+
+```typescript packages/ai/src/tools/datetime.ts
+import { tool } from "ai";
+import { addDays, format } from "date-fns";
+import { z } from "zod/v4";
+
+export const getCurrentDateTime = tool({
+  description:
+    "Get current date and time information. Useful for providing context when discussing forecasts.",
+  inputSchema: z.object({}),
+  execute: () => {
+    const now = new Date();
+    return {
+      date: format(now, "EEEE, MMMM do, yyyy"),
+      time: format(now, "h:mm a"),
+      dayOfWeek: format(now, "EEEE"),
+    };
+  },
+});
+
+export const getRelativeDate = tool({
+  description: "Get date information for a specific number of days from today.",
+  inputSchema: z.object({
+    daysOffset: z
+      .number()
+      .describe(
+        "Number of days from today (0 = today, 1 = tomorrow, -1 = yesterday)"
+      ),
+  }),
+  execute: ({ daysOffset }) => {
+    const targetDate = addDays(new Date(), daysOffset);
+    const relativeText =
+      daysOffset === 0
+        ? "today"
+        : daysOffset === 1
+          ? "tomorrow"
+          : daysOffset === -1
+            ? "yesterday"
+            : daysOffset > 1
+              ? `in ${daysOffset} days`
+              : `${Math.abs(daysOffset)} days ago`;
+
+    return {
+      date: format(targetDate, "EEEE, MMMM do"),
+      dayOfWeek: format(targetDate, "EEEE"),
+      relativeText,
+    };
+  },
+});
+```
+
+### Weather
+
+Three coordinated tools cover location lookup and weather retrieval. They use the [OpenWeatherMap API](https://openweathermap.org/api) and require the `OPENWEATHERMAP_API_KEY` environment variable.
+
+```typescript packages/ai/src/tools/weather.ts
+import { tool } from "ai";
+import { format } from "date-fns";
+import { z } from "zod/v4";
+
+const API_BASE_URL = "https://api.openweathermap.org/data/2.5";
+const GEO_API_URL = "http://api.openweathermap.org/geo/1.0";
+const API_KEY = process.env.OPENWEATHERMAP_API_KEY;
+
+export const getGeocodeLocation = tool({
+  description: "Get geocode location for a city.",
+  inputSchema: z.object({
+    location: z.string().describe('City name (e.g., "London", "New York, US")'),
+  }),
+  execute: async ({ location }) => {
+    const response = await fetch(
+      `${GEO_API_URL}/direct?q=${encodeURIComponent(location)}&limit=1&appid=${API_KEY}`
+    );
+    const data = await response.json();
+    return data[0];
+  },
+});
+
+export const getCurrentWeather = tool({
+  description: "Get current weather information for a city.",
+  inputSchema: z.object({
+    lat: z.number(),
+    lon: z.number(),
+  }),
+  execute: async ({ lat, lon }) => {
+    const response = await fetch(
+      `${API_BASE_URL}/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
+    );
+    const data = await response.json();
+    return {
+      temperature: Math.round(data.main.temp),
+      description: data.weather[0].description,
+      humidity: data.main.humidity,
+      windSpeed: Math.round(data.wind.speed * 3.6),
+    };
+  },
+});
+
+export const getWeatherForecast = tool({
+  description: "Get weather forecast for a city.",
+  inputSchema: z.object({
+    lat: z.number(),
+    lon: z.number(),
+    days: z
+      .number()
+      .optional()
+      .default(3)
+      .describe("Number of forecast days (1-5, default: 3)"),
+  }),
+  execute: async ({ lat, lon, days = 3 }) => {
+    const response = await fetch(
+      `${API_BASE_URL}/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
+    );
+    const data = await response.json();
+
+    const maxTimestamp = Date.now() + days * 24 * 60 * 60 * 1000;
+    const forecast = data.list
+      .filter((item: any) => item.dt * 1000 <= maxTimestamp)
+      .map((item: any) => ({
+        datetime: format(new Date(item.dt * 1000), "EEE MMM d, h:mm a"),
+        temperature: Math.round(item.main.temp),
+        description: item.weather[0].description,
+        humidity: item.main.humidity,
+        windSpeed: Math.round(item.wind.speed * 3.6),
+      }));
+
+    return { forecast };
+  },
+});
+```
+
+<Tip>
+  `getGeocodeLocation` resolves a city name to latitude/longitude coordinates. The model typically calls it first, then passes the result to `getCurrentWeather` or `getWeatherForecast`.
+</Tip>
+
+## Tools barrel export
+
+All tools are re-exported from a single index file and imported as a namespace in `generateResponse`.
+
+```typescript packages/ai/src/tools/index.ts
+export * from "./calculator";
+export * from "./datetime";
+export * from "./weather";
+```
+
+```typescript packages/ai/src/index.ts
+import * as tools from "./tools";
+
+// ...
+
+return generateText({
+  model: openRouter(model),
+  system: SYSTEM_PROMPT,
+  stopWhen: stepCountIs(10),
+  ...(modelInfo.tools && { tools }),
+  messages,
+});
+```
+
+The spread `...(modelInfo.tools && { tools })` means the entire tools namespace is passed or omitted as a unit. Individual tools cannot currently be enabled or disabled per channel.
+
+## How to add a new tool
+
+<Steps>
+  <Step title="Create the tool file">
+    Add a new file under `packages/ai/src/tools/`. Define and export your tool using the `tool()` helper from `ai`.
+
+    ```typescript packages/ai/src/tools/my-tool.ts
+    import { tool } from "ai";
+    import { z } from "zod/v4";
+
+    export const myTool = tool({
+      description: "Short description the model uses to decide when to call this.",
+      inputSchema: z.object({
+        input: z.string().describe("The input parameter"),
+      }),
+      execute: async ({ input }) => {
+        // your implementation
+        return { result: input };
+      },
+    });
+    ```
+  </Step>
+  <Step title="Export from the barrel">
+    Add a re-export to `packages/ai/src/tools/index.ts`.
+
+    ```typescript packages/ai/src/tools/index.ts
+    export * from "./calculator";
+    export * from "./datetime";
+    export * from "./weather";
+    export * from "./my-tool";
+    ```
+
+    Because `generateResponse` imports the entire namespace with `import * as tools from "./tools"`, your tool is automatically included the next time a tool-capable model is used.
+  </Step>
+  <Step title="Verify the model supports tools">
+    Tools are only passed to the model when `availableModelsInfo[model].tools` is `true`. Test your tool with one of the tool-capable models: `x-ai/grok-4-fast:free`, `nvidia/nemotron-nano-9b-v2:free`, or `moonshotai/kimi-k2:free`.
+  </Step>
+  <Step title="Add any required environment variables">
+    If your tool calls an external API, add the API key to your `.env` file and document it alongside `OPENROUTER_API_KEY` and `OPENWEATHERMAP_API_KEY`.
+  </Step>
+</Steps>

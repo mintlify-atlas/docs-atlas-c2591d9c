@@ -1,0 +1,203 @@
+---
+title: "File-based routing"
+description: "How TanStack Router's file-based routing is structured, including route groups, guards, and dynamic segments."
+---
+
+TanStack Router uses the file system as the source of truth for routes. The `@tanstack/router-plugin` Vite plugin scans `src/routes/` and generates `src/routeTree.gen.ts` automatically — you never edit that file by hand.
+
+## Route directory structure
+
+```text
+apps/web/src/routes/
+├── __root.tsx                              # Root layout
+├── _auth/
+│   ├── route.tsx                           # Auth group layout + guard
+│   ├── index.tsx                           # /  (sign-in page)
+│   └── sign-up.tsx                         # /sign-up
+└── _protected/
+    ├── route.tsx                           # Protected group guard
+    ├── chat.$uuid/
+    │   ├── index.tsx                       # /chat/:uuid  (chat room)
+    │   └── details.tsx                     # /chat/:uuid/details
+    └── _bottom-navigation/
+        ├── route.tsx                       # Bottom nav shell layout
+        ├── chat.tsx                        # /chat  (channel list)
+        └── profile.tsx                     # /profile
+```
+
+## Router context
+
+The root route defines a `MyRouterContext` type that is threaded through every route. This gives loaders and `beforeLoad` hooks type-safe access to both the `QueryClient` and the current session.
+
+```typescript apps/web/src/routes/__root.tsx
+import type { QueryClient } from "@tanstack/react-query";
+import { createRootRouteWithContext, Outlet } from "@tanstack/react-router";
+import type { authClient } from "@/lib/auth";
+
+type MyRouterContext = {
+  queryClient: QueryClient;
+  auth: ReturnType<typeof authClient.useSession>;
+};
+
+export const Route = createRootRouteWithContext<MyRouterContext>()({{
+  component: () => (
+    <>
+      <div className="h-screen">
+        <Outlet />
+      </div>
+      <Toaster />
+      {/* devtools, DEV only */}
+    </>
+  ),
+});
+```
+
+The router is instantiated in `main.tsx` and the context values are injected at render time:
+
+```typescript apps/web/src/main.tsx
+const TanStackQueryProviderContext = tanstackQueryContext();
+const router = createRouter({
+  routeTree,
+  context: {
+    ...TanStackQueryProviderContext,
+    // biome-ignore lint/style/noNonNullAssertion: will be defined in RouterProviderWithAuth
+    auth: undefined!,
+  },
+  defaultPreload: "intent",
+  scrollRestoration: true,
+  defaultStructuralSharing: true,
+  defaultPreloadStaleTime: 0,
+});
+```
+
+The `auth` value is supplied by `RouterProviderWithAuth`, a component that reads the live session before rendering the router:
+
+```typescript apps/web/src/main.tsx
+function RouterProviderWithAuth() {
+  const auth = authClient.useSession();
+
+  if (auth.isPending) {
+    return (
+      <div className="grid h-screen place-items-center">
+        <Loader className="size-10 animate-spin" />
+      </div>
+    );
+  }
+
+  return <RouterProvider context={{ auth }} router={router} />;
+}
+```
+
+## Route groups
+
+TanStack Router supports **pathless route groups** — directories prefixed with `_`. They provide shared layout components and `beforeLoad` guards without contributing a URL segment.
+
+### `_auth/` — unauthenticated pages
+
+The `_auth` group redirects already-authenticated users away to `/chat`.
+
+```typescript apps/web/src/routes/_auth/route.tsx
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/_auth")({
+  beforeLoad: ({ context: { auth } }) => {
+    if (auth.data) {
+      throw redirect({ to: "/chat" });
+    }
+  },
+  component: RouteComponent,
+});
+
+function RouteComponent() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <Outlet />
+    </div>
+  );
+}
+```
+
+### `_protected/` — authenticated pages
+
+The `_protected` group redirects unauthenticated users to the sign-in page at `/`.
+
+```typescript apps/web/src/routes/_protected/route.tsx
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/_protected")({
+  beforeLoad: ({ context: { auth } }) => {
+    if (!auth.data) {
+      throw redirect({ to: "/" });
+    }
+  },
+  component: Outlet,
+});
+```
+
+<Tip>
+  Because both guards run in `beforeLoad` — before any data fetching starts — there is no flash of protected content. The redirect is synchronous and happens during the navigation phase.
+</Tip>
+
+## Dynamic routes
+
+A `$` prefix in a file or directory name creates a dynamic path parameter. The segment name after `$` becomes the parameter key.
+
+`chat.$uuid/index.tsx` matches `/chat/:uuid` and the parameter is accessed with `Route.useParams()`:
+
+```typescript apps/web/src/routes/_protected/chat.$uuid/index.tsx
+export const Route = createFileRoute("/_protected/chat/$uuid/")({
+  loader: async ({ context: { queryClient }, params }) => {
+    await Promise.all([
+      queryClient.ensureQueryData(
+        orpc.chat.channel.getChannel.queryOptions({
+          input: { uuid: params.uuid },
+        })
+      ),
+      queryClient.ensureQueryData(
+        orpc.chat.message.getChannelMessages.queryOptions({
+          input: { uuid: params.uuid },
+        })
+      ),
+    ]);
+  },
+  component: RouteComponent,
+});
+
+function RouteComponent() {
+  const { uuid } = Route.useParams();
+  // ...
+}
+```
+
+## Nested layouts
+
+Nested route groups compose layouts. For example, `_protected/_bottom-navigation/route.tsx` renders a bottom navigation bar and an `<Outlet />` above it. Any route nested inside `_bottom-navigation/` automatically gets the navigation shell.
+
+```typescript apps/web/src/routes/_protected/_bottom-navigation/route.tsx
+export const Route = createFileRoute("/_protected/_bottom-navigation")({
+  component: RouteComponent,
+});
+
+function RouteComponent() {
+  const { pathname } = useLocation();
+
+  return (
+    <div className="grid h-screen grid-rows-[1fr_auto] overflow-hidden">
+      <div className="overflow-y-auto">
+        <header className="sticky top-0 z-10 ...">
+          {pathname === "/chat" && <NewChannel />}
+        </header>
+        <Outlet />
+      </div>
+      <footer className="flex items-center justify-center gap-10 p-4">
+        <Button asChild>
+          <Link to="/chat">Chat</Link>
+        </Button>
+        <Button asChild>
+          <Link to="/profile">Profile</Link>
+        </Button>
+      </footer>
+    </div>
+  );
+}
+```

@@ -1,0 +1,291 @@
+---
+title: "Hono + oRPC"
+description: "Contract-first API design with oRPC: defining contracts, implementing handlers, composing middleware, and handling errors."
+---
+
+oRPC ties the backend and frontend together through shared contracts. A contract declares exactly what inputs an endpoint accepts, what it returns, and which errors it can throw — all expressed as Zod schemas. Handlers then implement those contracts, and the frontend client consumes them with full type inference.
+
+## Contract-first approach
+
+Every endpoint starts as a contract built with the `oc` builder from `@orpc/contract`. The contract defines the HTTP method, path, input schema, output schema, and possible errors — nothing is left implicit.
+
+```typescript apps/api/src/modules/chat/channel/channel.contract.ts
+import {
+  channelParticipantSchema,
+  channelSchema,
+  channelSettingsSchema,
+  userSchema,
+} from "@hono-orpc/db/schema";
+import { oc } from "@orpc/contract";
+import { z } from "zod/v4";
+
+const channelContract = oc
+  .route({
+    tags: ["chat", "channel"],
+  })
+  .errors({
+    UNAUTHORIZED: {},
+  });
+
+const getChannels = channelContract
+  .route({
+    method: "GET",
+    description: "Get user's channels",
+    path: "/chat/channel",
+  })
+  .errors({
+    UNAUTHORIZED: {},
+  })
+  .output(z.array(channelSchema));
+
+const createChannel = channelContract
+  .route({
+    method: "POST",
+    description: "Create a new channel",
+    path: "/chat/channel",
+    successStatus: 201,
+  })
+  .errors({
+    INTERNAL_SERVER_ERROR: {},
+  })
+  .input(
+    z.object({
+      name: z.string().min(1).describe("The name of the channel"),
+      members: z
+        .array(z.string())
+        .min(1)
+        .describe("The members of the channel"),
+    })
+  )
+  .output(channelSchema);
+
+const getChannel = channelContract
+  .route({
+    method: "GET",
+    description: "Get a channel by id",
+    path: "/chat/channel/{uuid}",
+  })
+  .errors({
+    FORBIDDEN: {
+      message: "You are not a member of this channel",
+    },
+    NOT_FOUND: {
+      message: "Channel not found",
+    },
+  })
+  .input(z.object({ uuid: z.uuid().describe("The uuid of the channel") }))
+  .output(
+    channelSchema.extend({
+      participants: z
+        .array(channelParticipantSchema.extend({ user: userSchema.nullable() }))
+        .nullable(),
+    })
+  );
+```
+
+## Implementing handlers
+
+Handlers are implemented with `implement()` from `@orpc/server`. The router is bound to the contract, and each procedure is wired up with `use()` for middleware and `.handler()` for the implementation.
+
+```typescript apps/api/src/modules/chat/channel/channel.router.ts
+import db from "@hono-orpc/db";
+import { channel, channelParticipant } from "@hono-orpc/db/tables";
+import { implement } from "@orpc/server";
+import { and, eq } from "drizzle-orm";
+import { authMiddleware } from "../../../middlewares/auth-middleware";
+import channelContract from "./channel.contract";
+
+const chatRouter = implement(channelContract).$context<{ headers: Headers }>();
+
+const getChannels = chatRouter.getChannels
+  .use(authMiddleware)
+  .handler(async ({ context }) => {
+    const userChannels = await db.query.channelParticipant.findMany({
+      where: eq(channelParticipant.userId, context.user.id),
+      with: {
+        channel: true,
+      },
+    });
+
+    return userChannels.map((uc) => uc.channel);
+  });
+
+const createChannel = chatRouter.createChannel
+  .use(authMiddleware)
+  .handler(async ({ context, input, errors }) => {
+    const [ch] = await db
+      .insert(channel)
+      .values({
+        ...input,
+        ownerId: context.user.id,
+      })
+      .returning();
+
+    if (!ch) {
+      throw errors.INTERNAL_SERVER_ERROR({
+        message: "Failed to create channel",
+      });
+    }
+
+    await db.insert(channelParticipant).values([
+      {
+        channelUuid: ch.uuid,
+        userId: context.user.id,
+        role: "owner",
+      },
+      ...input.members.map((userId) => ({
+        channelUuid: ch.uuid,
+        userId,
+      })),
+    ]);
+
+    return ch;
+  });
+```
+
+## Middleware composition
+
+Middleware is applied per-procedure with `.use()`. Each middleware extends the context that downstream handlers receive. Multiple middleware calls are chained in order.
+
+```typescript apps/api/src/modules/chat/channel/channel.router.ts
+const getChannel = chatRouter.getChannel
+  .use(authMiddleware)          // validates session, adds context.user
+  .use(userInChannelMiddleware) // verifies membership
+  .handler(async ({ input, errors }) => {
+    const ch = await db.query.channel.findFirst({
+      where: eq(channel.uuid, input.uuid),
+      with: {
+        participants: {
+          with: {
+            user: true,
+          },
+        },
+      },
+    });
+
+    if (!ch) {
+      throw errors.NOT_FOUND();
+    }
+
+    return ch;
+  });
+```
+
+<Note>
+  After `authMiddleware` runs, `context.user` is guaranteed to exist and is fully typed. TypeScript will error if you access `context.user` on a procedure that does not have `authMiddleware` applied.
+</Note>
+
+## OpenAPI handler
+
+The `OpenAPIHandler` wraps the root router and serves both the OpenAPI spec and all RPC calls under `/api/rpc`. The `OpenAPIReferencePlugin` generates the spec from the contract definitions.
+
+```typescript apps/api/src/index.ts
+const handler = new OpenAPIHandler(router, {
+  plugins: [
+    new OpenAPIReferencePlugin({
+      schemaConverters: [new ZodToJsonSchemaConverter()],
+      specGenerateOptions: {
+        info: {
+          title: "Hono oRPC Chat",
+          version: "0.0.1",
+        },
+        servers: [{ url: "/api/rpc" }],
+      },
+    }),
+  ],
+});
+
+app.use("/rpc/*", async (c, next) => {
+  const { matched, response } = await handler.handle(c.req.raw, {
+    prefix: "/api/rpc",
+    context: {
+      headers: c.req.raw.headers,
+    },
+  });
+
+  if (matched) {
+    return c.newResponse(response.body, response);
+  }
+
+  await next();
+});
+```
+
+## Error handling
+
+Errors are declared on the contract and thrown as typed objects inside handlers. oRPC maps them to the correct HTTP status codes and includes them in the OpenAPI spec.
+
+| Error key | HTTP status |
+|-----------|-------------|
+| `UNAUTHORIZED` | 401 |
+| `FORBIDDEN` | 403 |
+| `NOT_FOUND` | 404 |
+| `INTERNAL_SERVER_ERROR` | 500 |
+
+Throw an error by calling `errors.<KEY>()` from the handler arguments:
+
+```typescript
+.handler(async ({ input, errors }) => {
+  const ch = await db.query.channel.findFirst({
+    where: eq(channel.uuid, input.uuid),
+  });
+
+  if (!ch) {
+    throw errors.NOT_FOUND();
+  }
+
+  return ch;
+});
+```
+
+You can also include a custom message:
+
+```typescript
+if (!ch) {
+  throw errors.INTERNAL_SERVER_ERROR({
+    message: "Failed to create channel",
+  });
+}
+```
+
+## How to add a new endpoint
+
+<Steps>
+  <Step title="Define the contract">
+    Add a new procedure to the relevant `*.contract.ts` file using the `oc` builder. Specify the HTTP method, path, input/output Zod schemas, and any typed errors.
+
+    ```typescript
+    const myEndpoint = myContract
+      .route({
+        method: "POST",
+        path: "/my-resource",
+        successStatus: 201,
+      })
+      .errors({
+        NOT_FOUND: { message: "Resource not found" },
+      })
+      .input(z.object({ name: z.string() }))
+      .output(mySchema);
+    ```
+  </Step>
+  <Step title="Export from the contract module">
+    Add the new procedure to the `export default` object at the bottom of the contract file.
+  </Step>
+  <Step title="Implement the handler">
+    In the corresponding `*.router.ts` file, implement the handler. Apply middleware with `.use()` and write the logic in `.handler()`.
+
+    ```typescript
+    const myEndpoint = myRouter.myEndpoint
+      .use(authMiddleware)
+      .handler(async ({ input, context, errors }) => {
+        // implementation
+      });
+    ```
+  </Step>
+  <Step title="Export from the router module">
+    Add the handler to the `export default` object in the router file.
+  </Step>
+  <Step title="Verify the OpenAPI spec">
+    Start the dev server and open `/api/rpc` to confirm the new endpoint appears in the generated OpenAPI spec.
+  </Step>
+</Steps>

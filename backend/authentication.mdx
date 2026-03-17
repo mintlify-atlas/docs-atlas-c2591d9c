@@ -1,0 +1,122 @@
+---
+title: "Authentication"
+description: "Session-based authentication with Better-Auth, supporting email/password and Google OAuth."
+---
+
+Authentication is handled by [Better-Auth](https://better-auth.com) with a Drizzle adapter connected to PostgreSQL. The library manages sessions, CSRF protection, and OAuth flows out of the box.
+
+## Configuration
+
+The `auth` instance is created once in `apps/api/src/lib/auth.ts` and shared across the application.
+
+```typescript apps/api/src/lib/auth.ts
+import db from "@hono-orpc/db";
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+
+export const auth = betterAuth({
+  database: drizzleAdapter(db, {
+    provider: "pg",
+  }),
+  emailAndPassword: {
+    enabled: true,
+  },
+  socialProviders: {
+    google: {
+      prompt: "select_account",
+      clientId: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+    },
+  },
+});
+```
+
+### Supported providers
+
+- **Email and password** — enabled directly with `emailAndPassword.enabled: true`. Better-Auth handles hashing, token generation, and session creation.
+- **Google OAuth** — configured under `socialProviders.google`. The `prompt: "select_account"` option always shows the Google account picker.
+
+## Environment variables
+
+Add the following to your `.env` file in `apps/api`:
+
+```text .env
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+```
+
+<Warning>
+  Both variables must be set even if you only intend to use email/password authentication, because the `auth` object is constructed at startup. Remove the `google` block from the config if you do not need Google OAuth.
+</Warning>
+
+## Auth routes
+
+Better-Auth's built-in HTTP handler is mounted in `apps/api/src/index.ts` at `/api/auth/**`:
+
+```typescript apps/api/src/index.ts
+app.on(["POST", "GET"], "/auth/**", (c) => auth.handler(c.req.raw))
+```
+
+This single line exposes all Better-Auth endpoints — sign-in, sign-up, sign-out, OAuth callbacks, session refresh, and more — without any additional configuration.
+
+## Auth middleware
+
+The `authMiddleware` validates the session on every protected procedure and makes `context.user` available to handlers.
+
+```typescript apps/api/src/middlewares/auth-middleware.ts
+import { ORPCError, os } from "@orpc/server";
+import { auth } from "../lib/auth";
+
+export const authMiddleware = os
+  .$context<{ headers: Headers }>()
+  .middleware(async ({ context, next }) => {
+    const session = await auth.api.getSession({ headers: context.headers });
+
+    if (!session) {
+      throw new ORPCError("UNAUTHORIZED");
+    }
+
+    return next({
+      context: {
+        ...context,
+        user: session.user,
+      },
+    });
+  });
+```
+
+The middleware:
+
+1. Reads the session cookie (or `Authorization` header) from the raw request headers passed through from the Hono context.
+2. Calls `auth.api.getSession()` which validates the session against the database.
+3. Throws an `UNAUTHORIZED` oRPC error if no valid session exists.
+4. Extends the context with `user` so every downstream handler has access to the authenticated user.
+
+## Using context.user in handlers
+
+Once `authMiddleware` is applied to a procedure, `context.user` is typed and available in the handler:
+
+```typescript
+const getChannels = chatRouter.getChannels
+  .use(authMiddleware)
+  .handler(async ({ context }) => {
+    const userChannels = await db.query.channelParticipant.findMany({
+      where: eq(channelParticipant.userId, context.user.id),
+      with: {
+        channel: true,
+      },
+    });
+
+    return userChannels.map((uc) => uc.channel);
+  });
+```
+
+<Note>
+  `context.user` is only present after `authMiddleware` runs. TypeScript enforces this — accessing `context.user` on a procedure without the middleware will produce a compile-time error.
+</Note>
+
+## Database tables
+
+Better-Auth manages its own tables (`user`, `session`, `account`, `verification`) through the Drizzle adapter. These are defined in `packages/db/src/tables/auth.ts` and are automatically migrated alongside the rest of the schema.
+
+See [Database](/backend/database) for the full table definitions.

@@ -1,0 +1,43 @@
+---
+title: "Delete channel"
+description: "Permanently delete a channel. Only the channel owner can perform this action."
+---
+
+Permanently deletes a channel and all associated data. The authenticated user must be the owner of the channel.
+
+```http
+DELETE /api/rpc/chat/channel/{uuid}
+```
+
+## Request
+
+<ParamField path="uuid" type="string" required>
+  UUID of the channel to delete.
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on success. No response body is returned.
+
+## Error codes
+
+| Code | Description |
+|------|-------------|
+| `UNAUTHORIZED` | No valid session cookie was provided. |
+| `FORBIDDEN` | You are not the owner of this channel. |
+| `NOT_FOUND` | Channel not found. |
+
+## Example
+
+```typescript
+import { orpc } from "@/lib/orpc-client";
+import { useMutation } from "@tanstack/react-query";
+
+const { mutate: deleteChannel } = useMutation(
+  orpc.chat.channel.deleteChannel.mutationOptions()
+);
+
+deleteChannel({
+  uuid: "018e4c7f-3b2a-7000-8abc-def012345678",
+});
+```

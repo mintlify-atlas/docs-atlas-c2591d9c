@@ -1,0 +1,62 @@
+---
+title: "Search users"
+description: "Search for users by name or email to find people to invite to a channel."
+---
+
+```bash
+POST /user/search
+```
+
+<Info>Authentication is required. Results exclude the authenticated user and the built-in AI user.</Info>
+
+## Body parameters
+
+<ParamField body="query" type="string" required>
+  The search text to match against user names and email addresses. Matching is case-insensitive and supports partial strings.
+</ParamField>
+
+## Response
+
+Returns an array of user objects whose `name` or `email` contains the query string.
+
+<ResponseField name="id" type="string">
+  Unique identifier of the user.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Email address of the user.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the user.
+</ResponseField>
+
+<ResponseField name="image" type="string | null">
+  URL of the user's profile image.
+</ResponseField>
+
+## Errors
+
+| Status | Code | Description |
+| --- | --- | --- |
+| 401 | `UNAUTHORIZED` | The request is not authenticated. |
+
+## TypeScript example
+
+```typescript
+import { orpc } from '@/lib/orpc'
+import { useMutation } from '@tanstack/react-query'
+
+function UserSearch() {
+  const { mutate: searchUser, data: users } = useMutation(
+    orpc.user.searchUser.mutationOptions()
+  )
+
+  return (
+    <input
+      placeholder="Search users..."
+      onChange={(e) => searchUser({ query: e.target.value })}
+    />
+  )
+}
+```

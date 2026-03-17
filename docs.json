@@ -1,122 +1,95 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Hono oRPC Chat",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#6366f1",
+    "light": "#818cf8",
+    "dark": "#4338ca"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/aldotestino/hono-orpc"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/aldotestino/hono-orpc"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "project-structure"]
+          },
+          {
+            "group": "Backend",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "backend/overview",
+              "backend/hono-orpc",
+              "backend/authentication",
+              "backend/database",
+              "backend/real-time-streaming"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Frontend",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "frontend/overview",
+              "frontend/routing",
+              "frontend/data-fetching",
+              "frontend/real-time-updates"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "AI Integration",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "ai/overview",
+              "ai/models",
+              "ai/tool-calling",
+              "ai/channel-configuration"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Channels",
             "pages": [
-              "api-reference/introduction"
+              "api-reference/channels/get-channels",
+              "api-reference/channels/create-channel",
+              "api-reference/channels/get-channel",
+              "api-reference/channels/delete-channel",
+              "api-reference/channels/leave-channel",
+              "api-reference/channels/add-members",
+              "api-reference/channels/remove-member",
+              "api-reference/channels/get-settings",
+              "api-reference/channels/set-settings"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Messages",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api-reference/messages/get-messages",
+              "api-reference/messages/send-message",
+              "api-reference/messages/stream-messages"
+            ]
+          },
+          {
+            "group": "Users",
+            "pages": [
+              "api-reference/users/search-user"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

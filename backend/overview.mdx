@@ -1,0 +1,125 @@
+---
+title: "Backend overview"
+description: "How the Hono + oRPC backend is structured, from the entry point to module organization."
+---
+
+The backend lives in `apps/api` and is built on four core libraries that work together to give you a fully type-safe, self-documenting API.
+
+<CardGroup cols={2}>
+  <Card title="Hono" icon="bolt">
+    Lightweight, edge-ready web framework. Handles routing, middleware, and serves the compiled frontend as a static site.
+  </Card>
+  <Card title="oRPC" icon="code">
+    Contract-first API layer. Contracts are defined once with Zod schemas; handlers implement them with full type inference. Generates an OpenAPI spec automatically.
+  </Card>
+  <Card title="Better-Auth" icon="lock">
+    Handles email/password and Google OAuth sessions. Provides a ready-to-use session API consumed by the auth middleware.
+  </Card>
+  <Card title="Drizzle ORM" icon="database">
+    Type-safe PostgreSQL ORM. Table definitions drive both the database schema and the Zod schemas used across contracts.
+  </Card>
+</CardGroup>
+
+## Entry point
+
+The Hono application is created in `apps/api/src/index.ts`. It wires together the oRPC OpenAPI handler, the Better-Auth session handler, and the static web app middleware.
+
+```typescript apps/api/src/index.ts
+import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { Hono } from "hono";
+import { logger } from "hono/logger";
+import { auth } from "./lib/auth";
+import { seedChatAIUser } from "./lib/seed";
+import { serveWebApp } from "./middlewares/serve-web-app";
+import router from "./modules/router";
+
+// seed db with ai user
+await seedChatAIUser();
+
+const handler = new OpenAPIHandler(router, {
+  plugins: [
+    new OpenAPIReferencePlugin({
+      schemaConverters: [new ZodToJsonSchemaConverter()],
+      specGenerateOptions: {
+        info: {
+          title: "Hono oRPC Chat",
+          version: "0.0.1",
+        },
+        servers: [{ url: "/api/rpc" }],
+      },
+    }),
+  ],
+});
+
+const app = new Hono()
+  .use("*", serveWebApp)
+  .use(logger())
+  .basePath("/api")
+  .on(["POST", "GET"], "/auth/**", (c) => auth.handler(c.req.raw))
+  .use("/rpc/*", async (c, next) => {
+    const { matched, response } = await handler.handle(c.req.raw, {
+      prefix: "/api/rpc",
+      context: {
+        headers: c.req.raw.headers,
+      },
+    });
+
+    if (matched) {
+      return c.newResponse(response.body, response);
+    }
+
+    await next();
+  });
+
+export default app;
+```
+
+## Route organization
+
+All oRPC contracts and routers are organized by module under `apps/api/src/modules/`.
+
+```text
+apps/api/src/modules/
+├── contract.ts          # Root contract — combines all module contracts
+├── router.ts            # Root router — combines all module routers
+├── chat/
+│   ├── chat.contract.ts
+│   ├── channel/
+│   │   ├── channel.contract.ts
+│   │   └── channel.router.ts
+│   └── message/
+│       ├── message.contract.ts
+│       └── message.router.ts
+├── user/
+│   ├── user.contract.ts
+│   └── user.router.ts
+└── health/
+    ├── health.contract.ts
+    └── health.router.ts
+```
+
+The root `contract.ts` aggregates every module contract into a single object:
+
+```typescript apps/api/src/modules/contract.ts
+import chat from "./chat/chat.contract";
+import health from "./health/health.contract";
+import user from "./user/user.contract";
+
+export default {
+  health,
+  chat,
+  user,
+};
+```
+
+The shape of this object becomes the type that the frontend client uses to generate type-safe query hooks — one shared contract definition drives everything.
+
+## URL structure
+
+| Path | Handler |
+|------|---------|
+| `/api/auth/**` | Better-Auth session routes |
+| `/api/rpc/*` | oRPC — all application API calls |
+| `*` | Static web app (React frontend) |
