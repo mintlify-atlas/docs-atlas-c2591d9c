@@ -1,0 +1,109 @@
+{
+  "projectType": "saas",
+  "projectName": "Hono oRPC Chat",
+  "projectDescription": "A modern TypeScript full-stack chat application showcasing end-to-end type safety with Hono, oRPC, Drizzle ORM, Better-Auth, TanStack Router/Query, and Vercel AI SDK.",
+  "theme": "palm",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4338ca",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "project-structure"]
+          },
+          {
+            "group": "Backend",
+            "pages": [
+              "backend/overview",
+              "backend/hono-orpc",
+              "backend/authentication",
+              "backend/database",
+              "backend/real-time-streaming"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "frontend/overview",
+              "frontend/routing",
+              "frontend/data-fetching",
+              "frontend/real-time-updates"
+            ]
+          },
+          {
+            "group": "AI Integration",
+            "pages": [
+              "ai/overview",
+              "ai/models",
+              "ai/tool-calling",
+              "ai/channel-configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Channels",
+            "pages": [
+              "api-reference/channels/get-channels",
+              "api-reference/channels/create-channel",
+              "api-reference/channels/get-channel",
+              "api-reference/channels/delete-channel",
+              "api-reference/channels/leave-channel",
+              "api-reference/channels/add-members",
+              "api-reference/channels/remove-member",
+              "api-reference/channels/get-settings",
+              "api-reference/channels/set-settings"
+            ]
+          },
+          {
+            "group": "Messages",
+            "pages": [
+              "api-reference/messages/get-messages",
+              "api-reference/messages/send-message",
+              "api-reference/messages/stream-messages"
+            ]
+          },
+          {
+            "group": "Users",
+            "pages": [
+              "api-reference/users/search-user"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "End-to-end type safety from database schema to UI components using oRPC contracts",
+    "Real-time message streaming via Server-Sent Events with type-safe event publishers",
+    "AI assistant integration with @ai mentions, tool calling, and configurable models",
+    "Authentication with Better-Auth supporting email/password and Google OAuth",
+    "File-based routing with TanStack Router and automatic code splitting",
+    "TanStack Query integration with oRPC for automatic query options generation",
+    "Drizzle ORM with automatic Zod schema generation from database tables",
+    "Monorepo architecture with Bun workspaces for shared type safety"
+  ],
+  "publicApiSurface": [
+    "GET /api/rpc/chat/channel - Get user's channels",
+    "POST /api/rpc/chat/channel - Create a new channel",
+    "GET /api/rpc/chat/channel/{uuid} - Get a channel by id",
+    "DELETE /api/rpc/chat/channel/{uuid} - Delete a channel",
+    "POST /api/rpc/chat/channel/{uuid}/leave - Leave a channel",
+    "POST /api/rpc/chat/channel/{uuid}/remove-member - Remove a member",
+    "POST /api/rpc/chat/channel/{uuid}/add-members - Add members to a channel",
+    "GET /api/rpc/chat/channel/{uuid}/settings - Get channel settings",
+    "POST /api/rpc/chat/channel/{uuid}/settings - Set channel settings",
+    "GET /api/rpc/chat/channel/{uuid}/message - Get channel messages",
+    "POST /api/rpc/chat/channel/{uuid}/message - Send a message",
+    "GET /api/rpc/chat/channel/{uuid}/message/stream - Stream messages (SSE)",
+    "POST /api/rpc/user/search - Search for users",
+    "POST /api/auth/** - Better-Auth endpoints (sign-in, sign-up, OAuth)"
+  ]
+}
